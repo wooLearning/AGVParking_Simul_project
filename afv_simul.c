@@ -219,10 +219,6 @@ typedef struct {
     double cost;
 } CBSNode;
 
-// ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
-// ★★★★★★★★★★★★ 수정된 부분 1 ★★★★★★★★★★★★
-// ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
-
 // Agent 구조체 위에 회전 관련 헬퍼 함수들을 배치하여 다른 함수에서 호출 가능하게 함
 static inline AgentDir dir_from_delta(int dx, int dy) {
     if (dx == 1 && dy == 0) return DIR_RIGHT;
@@ -295,8 +291,8 @@ typedef struct {
     AgentManager* agent_manager;
     ScenarioManager* scenario_manager;
     Logger* logger;
-    int map_id; // ★ 현재 선택된 맵 번호(1~5)
-    PathAlgo path_algo; // ★ 경로계획 알고리즘 선택 상태
+    int map_id; // 현재 선택된 맵 번호(1~5)
+    PathAlgo path_algo; // 경로계획 알고리즘 선택 상태
     double total_cpu_time_ms;
     double last_step_cpu_time_ms;
     double max_step_cpu_time_ms;
@@ -1195,23 +1191,23 @@ void grid_map_load_scenario(GridMap* map, AgentManager* am, int scenario_id) {
     grid_map_clear(map);
 
     switch (scenario_id) {
-        case 1: {
-            static const char* MAP1 =
-                "1111111111111111111111111111111111111\n"
-                "C01GGG1GG1GGG1GGG1GGG1GGG1GGG1G11G111\n"
-                "A000000000000000000000000000000000001\n"
-                "B000000000000000000000000000000000001\n"
-                "0001GG1GG1GGG10001GGG1GGG1GGG1100e111\n"
-                "111111111111110001GGG1GGG1GGG11001111\n"
-                "100000000000000000000000000000000e111\n"
-                "100000000000000000000000000000000e111\n"
-                "11111111111111GGG1GGG1GGG1GGG1GG11111\n"
-                "1111111111111111111111111111111111111\n"
-                "1111111111111111111111111111111111111\n"
-                "1111111111111111111111111111111111111\n";
-            grid_map_fill_from_string(map, am, MAP1);
-            break;
-        }
+    case 1: {
+        static const char* MAP1 =
+            "1111111111111111111111111111111111111\n"
+            "C01GGG1GG1GGG1GGG1GGG1GGG1GGG1G11G111\n"
+            "A000000000000000000000000000000000001\n"
+            "B000000000000000000000000000000000001\n"
+            "0001GG1GG1GGG10001GGG1GGG1GGG1100e111\n"
+            "111111111111110001GGG1GGG1GGG11001111\n"
+            "100000000000000000000000000000000e111\n"
+            "100000000000000000000000000000000e111\n"
+            "11111111111111GGG1GGG1GGG1GGG1GG11111\n"
+            "1111111111111111111111111111111111111\n"
+            "1111111111111111111111111111111111111\n"
+            "1111111111111111111111111111111111111\n";
+        grid_map_fill_from_string(map, am, MAP1);
+        break;
+    }
     case 2: map_build_hypermart(map, am);              break; // 대형마트 주차장
     case 3: map_build_10agents_200slots(map, am);      break; // 10대 + 900칸 + 10x4
     case 4: map_build_biggrid_onegoal(map, am);        break; // 격자도로 + 주차블록 4개
@@ -1356,16 +1352,6 @@ static void map_build_hypermart(GridMap* m, AgentManager* am) {
     }
 }
 
-
-
-
-
-
-
-// (Map #3 제거됨)
-
-
-
 // #3: 10 agents + 900 parking slots
 // - 좌측 2차선 세로도로(x=2,3) + y=6,7 가로 2차선 피더 유지
 // - 스타트 영역을 10x4 → 16x6으로 '살짝' 확장
@@ -1433,7 +1419,7 @@ static void map_build_10agents_200slots(GridMap* m, AgentManager* am) {
         for (x = 1; x < GRID_WIDTH - 1; ++x)
             m->grid[y][x].is_obstacle = FALSE;
 
-    /* 7) ★충전소 4개: 확장된 스타트 영역 내부(오른쪽 끝 쪽 2×2) */
+    /* 7) 충전소 4개: 확장된 스타트 영역 내부(오른쪽 끝 쪽 2×2) */
     // (좌측 2차선(x=2,3) 및 통행에 간섭하지 않는 위치)
     {
         int cx = sx0 + sW - 4;  // start 영역 오른쪽으로 2칸 여유 두고
@@ -1507,11 +1493,6 @@ static void map_build_10agents_200slots(GridMap* m, AgentManager* am) {
         m->grid[y][3].is_goal = FALSE;
     }
 }
-
-
-
-
-
 
 // ──────────────────────────────────────────────────────────────
 // 1-차선 주차블록 + 1-칸 링도로 + 격자도로로의 연결(가까운 격자선에 스냅)
@@ -1656,16 +1637,6 @@ static void map_build_biggrid_onegoal(GridMap* m, AgentManager* am) {
                 m->goals[m->num_goals++] = &m->grid[y][x];
 }
 
-
-
-
-
-
-
-
-
-
-
 // #5: 십자가 맵 (Cross) - 중앙 충전소, 각 팔 끝에 에이전트, 각 에이전트에서 4칸 진행 지점에 주차칸
 static void map_build_cross_4agents(GridMap* m, AgentManager* am) {
     int x, y;
@@ -1709,7 +1680,7 @@ GridMap* grid_map_create(AgentManager* am) {
 }
 void grid_map_destroy(GridMap* m) { if (m) free(m); }
 
-int grid_is_valid_coord(int x, int y) { return (x >= 0 && x < GRID_WIDTH && y >= 0 && y < GRID_HEIGHT); }
+int grid_is_valid_coord(int x, int y) { return (x >= 0 && x < GRID_WIDTH&& y >= 0 && y < GRID_HEIGHT); }
 
 int grid_is_node_blocked(const GridMap* map, const AgentManager* am, const Node* n) {
     if (n->is_obstacle || n->is_parked || n->is_temp) return TRUE;
@@ -3002,10 +2973,6 @@ static void whca_adjust_horizon(int wf_edges, int scc, Logger* lg) {
 // 9-ALT) Alternate planners from 코드2(A*) / 코드3(D* Lite)
 // =============================================================================
 
-// ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
-// ★★★★★★★★★★★★ 수정된 부분 2 ★★★★★★★★★★★★
-// ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
-
 void agent_manager_plan_and_resolve_collisions_astar(AgentManager* manager, GridMap* map, Logger* logger, Node* next_pos[MAX_AGENTS]) {
     // 1. 목표 설정 및 next_pos 초기화 (모두 현재 위치에서 대기)
     for (int i = 0; i < MAX_AGENTS; i++) {
@@ -3317,7 +3284,7 @@ static int simulation_setup_speed(ScenarioManager* s) {
 }
 
 
-// ★ Map 선택 단계
+// Map 선택 단계
 static int simulation_setup_map(Simulation* sim) {
     printf(C_B_WHT "--- 맵 선택 (1~5) ---\n" C_NRM);
     printf("1. %s기본 주차장%s (기존)\n", C_B_GRN, C_NRM);
@@ -3576,7 +3543,6 @@ void simulation_run(Simulation* sim) {
             continue;     // 다음 루프로 넘어가서 입력만 계속 확인
         }
 
-
         // --- 기존 시뮬레이션 스텝 로직 ---
         ScenarioManager* sc = sim->scenario_manager;
         int phase_idx_for_step = sc->current_phase_index;
@@ -3595,12 +3561,6 @@ void simulation_run(Simulation* sim) {
 
         // 계획 단계 캡슐화
         simulation_plan_step(sim, next_pos);
-
-        // ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
-        // ★★★★★★★★★★★★ 수정된 부분 3 ★★★★★★★★★★★★
-        // ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
-        // 이 곳에 있던 회전 관련 로직 블록 전체를 삭제했습니다.
-        // 회전 로직은 각 `agent_manager_plan_and_resolve_collisions_*` 함수 내부로 통합되었습니다.
 
         int moved_this_step = apply_moves_and_update_stuck(sim, next_pos, prev_pos);
 
@@ -3684,11 +3644,11 @@ void simulation_print_performance_summary(const Simulation* sim) {
     printf(" Mode                                : %s\n", mode_label);
     printf(" Map ID                              : %d\n", sim->map_id);
     printf(" Total Physical Time Steps           : %d\n", recorded_steps);
-    
+
     printf(" Tasks Completed (total)             : %llu\n", sim->tasks_completed_total);
     printf(" Throughput [task / total physical time] : %.4f\n", throughput);
     printf(" Total Movement Cost (cells)         : %.2f\n", sim->total_movement_cost);
-    
+
     printf(" Requests Created (total)            : %llu\n", sim->requests_created_total);
     printf(" Request Wait Ticks (sum)            : %llu\n", sim->request_wait_ticks_sum);
     printf(" Algorithm Memory Usage Sum          : %.2f KB\n", sim->algo_mem_sum_kb);
@@ -3790,7 +3750,7 @@ int main() {
         printf("\n시뮬레이션이 취소되었습니다. 종료합니다.\n");
     }
 
-
     simulation_destroy(sim);
+
     return 0;
 }
