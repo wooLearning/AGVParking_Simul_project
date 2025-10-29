@@ -219,11 +219,11 @@ static int g_whca_horizon = 8;
  * @brief 대기 그래프(WFG) 및 Partial CBS 관련 한도 설정
  */
  // --- WFG 및 CBS 매개변수 ---
-#define MAX_WAIT_EDGES 512
-#define MAX_CBS_GROUP  4
+#define MAX_WAIT_EDGES 2048
+#define MAX_CBS_GROUP  6
 #define MAX_CBS_CONS   128
-#define MAX_CBS_NODES  256
-#define CBS_MAX_EXPANSIONS 256
+#define MAX_CBS_NODES  512
+#define CBS_MAX_EXPANSIONS 512
 
 /**
  * @brief ST-A*용 정적 버퍼 인덱스 상한 (메모리 선할당 크기)
@@ -763,7 +763,7 @@ void ui_clear_screen_optimized();
 
 int simulation_setup(Simulation* sim);
 
-// Map selection
+// ★ Map selection
 static int simulation_setup_map(Simulation* sim);
 void grid_map_load_scenario(GridMap* map, AgentManager* am, int scenario_id);
 // --- Procedural map builders (for Map #2 ~ #5)
@@ -836,7 +836,7 @@ static char get_single_char();
 static char get_char_input(const char* prompt, const char* valid);
 static int  get_integer_input(const char* prompt, int min, int max);
 static float get_float_input(const char* prompt, float min, float max);
-
+// *** NEW *** Non-blocking input check
 static int check_for_input();
 
 // --- PathfinderFactory: 경로파인더 생성/파괴 통일 ---
@@ -1088,10 +1088,18 @@ static void simulation_report_realtime_dashboard(Simulation* sim) {
     double throughput_avg = (double)total_completed / (double)steps;
     double throughput_interval = (double)delta_completed / (double)interval_steps;
     double avg_planning_ms = (steps > 0) ? sim->total_planning_time_ms / (double)steps : 0.0;
-    double avg_algo_memory_kb = (sim->algo_mem_samples > 0) ? sim->algo_mem_sum_kb / (double)sim->algo_mem_samples : 0.0;
+    double avg_memory_kb = (sim->memory_samples > 0) ? sim->memory_usage_sum_kb / (double)sim->memory_samples : 0.0;
+
+    int active_agents = 0;
+    if (sim->agent_manager) {
+        for (int i = 0; i < MAX_AGENTS; i++) {
+            if (sim->agent_manager->agents[i].pos) active_agents++;
+        }
+    }
 
     printf("\n========== Real-Time Dashboard @ step %d ==========\n", steps);
     printf(" Total Physical Time Steps      : %d\n", steps);
+    printf(" Operating AGVs                 : %d\n", active_agents);
     printf(" Tasks Completed (total)        : %llu\n", total_completed);
     printf(" Throughput (total avg)         : %.4f tasks/step\n", throughput_avg);
     printf(" Throughput (last interval)     : %.4f tasks/step over %d steps\n", throughput_interval, interval_steps);
@@ -1101,8 +1109,8 @@ static void simulation_report_realtime_dashboard(Simulation* sim) {
     printf(" Total Movement Cost            : %.2f cells\n", sim->total_movement_cost);
     printf(" Requests Created (total)       : %llu\n", sim->requests_created_total);
     printf(" Request Wait Ticks (sum)       : %llu\n", sim->request_wait_ticks_sum);
-    printf(" Algorithm Memory Usage Sum     : %.2f KB (avg %.2f KB / sample, peak %.2f KB)\n",
-        sim->algo_mem_sum_kb, avg_algo_memory_kb, sim->algo_mem_peak_kb);
+    printf(" Process Memory Usage Sum      : %.2f KB (avg %.2f KB / sample, peak %.2f KB)\n",
+        sim->memory_usage_sum_kb, avg_memory_kb, sim->memory_usage_peak_kb);
     printf("===================================================\n");
 
     sim->last_report_completed_tasks = total_completed;
@@ -1365,25 +1373,6 @@ static int apply_moves_and_update_stuck(Simulation* sim, Node* next_pos[MAX_AGEN
 static void update_deadlock_counter(Simulation* sim, int moved_this_step, int is_custom_mode) {
     ScenarioManager* sc = sim->scenario_manager;
     if (moved_this_step) return;
-
-    // [신규] 전원이 '의도된 정지' 상태(회전 대기/작업 대기/IDLE/CHARGING)라면 데드락으로 보지 않음
-    {
-        int all_intentional = 1;
-        for (int i = 0; i < MAX_AGENTS; ++i) {
-            const Agent* ag = &sim->agent_manager->agents[i];
-
-            // 움직일 의사가 없는 합법적 대기들은 넘어간다
-            if (ag->state == IDLE || ag->state == CHARGING || ag->action_timer > 0 || ag->rotation_wait > 0) {
-                continue;
-            }
-
-            // 여기에 도달했다 = '의도된 대기가 아닌' 에이전트가 최소 1명 존재
-            all_intentional = 0;
-            break;
-        }
-        if (all_intentional) return; // 전원이 의도된 대기 → deadlock 증가 X
-    }
-
     int unresolved = 0;
     if (is_custom_mode) {
         if (sc->current_phase_index < sc->num_phases) {
@@ -1881,7 +1870,7 @@ void grid_map_load_scenario(GridMap* map, AgentManager* am, int scenario_id) {
         break;
     }
 }
-// #2: 알고리즘 테스트 전용 하이퍼마트 테스트베드
+// #2: 알고리즘 테스트 전용 하이퍼마트 테스트베드 (우측 도달성 수정 포함)
 static void map_build_hypermart(GridMap* m, AgentManager* am) {
     int x, y;
 
@@ -1976,7 +1965,7 @@ static void map_build_hypermart(GridMap* m, AgentManager* am) {
         }
     }
 
-    // 11)우측 외곽 라인: 도로 + 목표 한 쌍으로 배치
+    // 11) (★수정 핵심) 우측 외곽 라인: 도로 + 목표 한 쌍으로 배치
     const int side_right_col = GRID_WIDTH - 4; // 목표 열
     const int side_right_road = GRID_WIDTH - 5; // 이 열을 '도로'로 새로 팜
     // 11-1) 수직도로 개설 (협곡 구간 포함)
@@ -2015,6 +2004,16 @@ static void map_build_hypermart(GridMap* m, AgentManager* am) {
         }
     }
 }
+
+
+
+
+
+
+
+// (Map #3 제거됨)
+
+
 
 // #3: 10 agents + 900 parking slots
 // - 좌측 2차선 세로도로(x=2,3) + y=6,7 가로 2차선 피더 유지
@@ -2083,15 +2082,15 @@ static void map_build_10agents_200slots(GridMap* m, AgentManager* am) {
         for (x = 1; x < GRID_WIDTH - 1; ++x)
             m->grid[y][x].is_obstacle = FALSE;
 
-    /* 7) ★충전소 4개: 확장된 스타트 영역 내부(오른쪽 끝 쪽 2×2) */
-    // (좌측 2차선(x=2,3) 및 통행에 간섭하지 않는 위치)
+    /* 7) ★충전소 4개: 시작 박스 좌측벽 라인으로 배치(2×2 형태) */
+    // 시작 영역의 좌측 경계(sx0) 근처에 밀착 배치하여 접근성 확보
     {
-        int cx = sx0 + sW - 4;  // start 영역 오른쪽으로 2칸 여유 두고
-        int cy = sy0 + 1;       // 상단에서 한 칸 내려
-        map_place_charge(m, cx, cy);
-        map_place_charge(m, cx + 2, cy);
-        map_place_charge(m, cx, cy + 2);
-        map_place_charge(m, cx + 2, cy + 2);
+        int cxL = sx0;          // 시작 박스 좌측벽 열
+        int cyT = sy0 + 1;      // 시작 박스 상단에서 한 칸 아래
+        map_place_charge(m, cxL, cyT);
+        map_place_charge(m, cxL + 1, cyT);
+        map_place_charge(m, cxL, cyT + 2);
+        map_place_charge(m, cxL + 1, cyT + 2);
     }
 
     /* 8) 주차 금지 행/열 마크 (교차로/피더 행 + 모든 세로차선 열) */
@@ -2157,6 +2156,11 @@ static void map_build_10agents_200slots(GridMap* m, AgentManager* am) {
         m->grid[y][3].is_goal = FALSE;
     }
 }
+
+
+
+
+
 
 // ──────────────────────────────────────────────────────────────
 // 1-차선 주차블록 + 1-칸 링도로 + 격자도로로의 연결(가까운 격자선에 스냅)
@@ -2354,7 +2358,7 @@ GridMap* grid_map_create(AgentManager* am) {
 }
 void grid_map_destroy(GridMap* m) { if (m) free(m); }
 
-int grid_is_valid_coord(int x, int y) { return (x >= 0 && x < GRID_WIDTH&& y >= 0 && y < GRID_HEIGHT); }
+int grid_is_valid_coord(int x, int y) { return (x >= 0 && x < GRID_WIDTH && y >= 0 && y < GRID_HEIGHT); }
 
 int grid_is_node_blocked(const GridMap* map, const AgentManager* am, const Node* n) {
     if (n->is_obstacle || n->is_parked || n->is_temp) return TRUE;
@@ -3285,6 +3289,8 @@ static Node* try_pull_over(const GridMap* map, const ReservationTable* rt, Agent
         Node* nb = (Node*)&map->grid[ny][nx];
         if (nb == ag->pos) { if (!ReservationTable_isOccupied(rt, 1, nb)) return nb; else continue; }
         if (nb->is_obstacle || nb->is_parked) continue;
+        // 타 에이전트가 예약한 주차칸은 대피 후보에서 제외
+        if (nb->reserved_by_agent != -1 && nb->reserved_by_agent != ag->id) continue;
         if (!ReservationTable_isOccupied(rt, 1, nb)) return nb;
     }
     return ag->pos;
@@ -4311,6 +4317,10 @@ static void resolve_conflicts_by_order(const AgentManager* m, const int order[MA
                 (next_pos[i] == m->agents[j].pos && next_pos[j] == m->agents[i].pos)) {
                 next_pos[j] = ((AgentManager*)m)->agents[j].pos;
             }
+            // 추가 규칙: 정지 중인 타 에이전트의 현재 칸으로의 진입 금지
+            else if (next_pos[i] == m->agents[j].pos && next_pos[j] == m->agents[j].pos) {
+                next_pos[i] = ((AgentManager*)m)->agents[i].pos;
+            }
         }
     }
 }
@@ -4646,6 +4656,8 @@ static void simulation_execute_one_step(Simulation* sim, int is_paused) {
 
     // 알고리즘 단계 샘플만 집계
     simulation_collect_memory_sample_algo(sim);
+    // 전체 프로세스 메모리 사용량 샘플 집계
+    simulation_collect_memory_sample(sim);
     sim->total_executed_steps = step_label;
 
     // 프레임 갱신 (프레임 스킵은 renderer 내부에서 처리됨)
@@ -4669,7 +4681,7 @@ static int simulation_is_complete(const Simulation* sim) {
     return FALSE;
 }
 
-// 실시간 제어 및 깜빡임 방지 로직
+// *** MODIFIED *** 실시간 제어 및 깜빡임 방지 로직 수정
 /**
  * @brief 메인 루프: 비동기 입력(P/S/±/[]/F/C/Q) 처리와 한 틱 실행을 반복합니다.
  * @param sim 시뮬레이션 인스턴스
@@ -4739,6 +4751,13 @@ void simulation_print_performance_summary(const Simulation* sim) {
     printf(" Mode                                : %s\n", mode_label);
     printf(" Map ID                              : %d\n", sim->map_id);
     printf(" Total Physical Time Steps           : %d\n", recorded_steps);
+    {
+        int active_agents = 0;
+        if (am) {
+            for (int i = 0; i < MAX_AGENTS; i++) if (am->agents[i].pos) active_agents++;
+        }
+        printf(" Operating AGVs                     : %d\n", active_agents);
+    }
 
     printf(" Tasks Completed (total)             : %llu\n", sim->tasks_completed_total);
     printf(" Throughput [task / total physical time] : %.4f\n", throughput);
@@ -4746,12 +4765,9 @@ void simulation_print_performance_summary(const Simulation* sim) {
 
     printf(" Requests Created (total)            : %llu\n", sim->requests_created_total);
     printf(" Request Wait Ticks (sum)            : %llu\n", sim->request_wait_ticks_sum);
-    printf(" Algorithm Memory Usage Sum          : %.2f KB\n", sim->algo_mem_sum_kb);
-    {
-        double avg_algo_kb = (sim->algo_mem_samples > 0) ? (sim->algo_mem_sum_kb / (double)sim->algo_mem_samples) : 0.0;
-        printf(" Algorithm Memory Usage Average      : %.2f KB\n", avg_algo_kb);
-    }
-    printf(" Algorithm Memory Usage Peak         : %.2f KB\n", sim->algo_mem_peak_kb);
+    printf(" Process Memory Usage Sum            : %.2f KB\n", sim->memory_usage_sum_kb);
+    printf(" Process Memory Usage Average        : %.2f KB\n", avg_memory_kb);
+    printf(" Process Memory Usage Peak           : %.2f KB\n", sim->memory_usage_peak_kb);
     printf(" Remaining Parked Vehicles           : %d\n", am ? am->total_cars_parked : 0);
 
     if (sc && sc->mode == MODE_CUSTOM) {
