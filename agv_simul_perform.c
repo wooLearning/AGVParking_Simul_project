@@ -610,10 +610,8 @@ typedef struct Simulation_ {
     unsigned long long algo_heap_moves_total;         // 총 힙 이동 수
     unsigned long long algo_nodes_expanded_last_step;  // 마지막 스텝의 노드 확장 수
     unsigned long long algo_heap_moves_last_step;      // 마지막 스텝의 힙 이동 수
-
     unsigned long long algo_generated_nodes_total;      // candidate nodes accepted this run
     unsigned long long algo_valid_expansions_total;     // successful relaxations this run
-
     unsigned long long algo_generated_nodes_last_step;  // generated nodes in last step
     unsigned long long algo_valid_expansions_last_step; // valid relaxations in last step
 } Simulation;
@@ -653,13 +651,13 @@ static struct {
     long long cbs_fail_sum;
     // --- WHCA* 노드 확장 수 (스텝별 임시 저장용) ---
     unsigned long long whca_nodes_expanded_this_step;
+    unsigned long long whca_heap_moves_this_step;
     // --- A* 알고리즘 메트릭 (스텝별 임시 저장용) ---
     unsigned long long astar_nodes_expanded_this_step;
     unsigned long long astar_heap_moves_this_step;
     // --- WHCA* 알고리즘 메트릭 (스텝별 임시 저장용 - D* Lite 부분) ---
     unsigned long long whca_dstar_nodes_expanded_this_step;
     unsigned long long whca_dstar_heap_moves_this_step;
-    unsigned long long whca_heap_moves_this_step;
     // --- D* Lite 알고리즘 메트릭 (스텝별 임시 저장용) ---
     unsigned long long dstar_nodes_expanded_this_step;
     unsigned long long dstar_heap_moves_this_step;
@@ -1160,6 +1158,7 @@ static void simulation_report_realtime_dashboard(Simulation* sim) {
     printf(" Request Wait Ticks (sum)       : %llu\n", sim->request_wait_ticks_sum);
     printf(" Process Memory Usage Sum      : %.2f KB (avg %.2f KB / sample, peak %.2f KB)\n",
         sim->memory_usage_sum_kb, avg_memory_kb, sim->memory_usage_peak_kb);
+    printf(" Heap Moves (total/last)          : %llu / %llu\n", sim->algo_heap_moves_total, sim->algo_heap_moves_last_step);
     printf(" Generated Nodes (total/last)     : %llu / %llu\n", sim->algo_generated_nodes_total, sim->algo_generated_nodes_last_step);
     printf(" Valid Expansions (total/last)    : %llu / %llu\n", sim->algo_valid_expansions_total, sim->algo_valid_expansions_last_step);
     double dash_ratio_total = (sim->algo_generated_nodes_total > 0) ? (double)sim->algo_valid_expansions_total / (double)sim->algo_generated_nodes_total : 0.0;
@@ -1363,19 +1362,22 @@ static void simulation_plan_step(Simulation* sim, Node* next_pos[MAX_AGENTS]) {
     sim->algo_generated_nodes_last_step = 0;
     sim->algo_valid_expansions_last_step = 0;
     g_metrics.whca_nodes_expanded_this_step = 0;  // WHCA* (Partial CBS) 노드 확장 수 초기화
+    g_metrics.whca_heap_moves_this_step = 0;        // WHCA* heap operations reset
     g_metrics.whca_dstar_nodes_expanded_this_step = 0;  // WHCA* (D* Lite 부분) 노드 확장 수 초기화
     g_metrics.whca_dstar_heap_moves_this_step = 0;      // WHCA* (D* Lite 부분) 힙 이동 수 초기화
-    g_metrics.whca_heap_moves_this_step = 0;            // WHCA* (ST-A*) 힙 이동 수 초기화
     g_metrics.astar_nodes_expanded_this_step = 0;  // A* 노드 확장 수 초기화
     g_metrics.astar_heap_moves_this_step = 0;      // A* 힙 이동 수 초기화
     g_metrics.dstar_nodes_expanded_this_step = 0;  // D* Lite 노드 확장 수 초기화
     g_metrics.dstar_heap_moves_this_step = 0;      // D* Lite 힙 이동 수 초기화
+
     g_metrics.whca_generated_nodes_this_step = 0;
     g_metrics.whca_valid_expansions_this_step = 0;
     g_metrics.whca_dstar_generated_nodes_this_step = 0;
     g_metrics.whca_dstar_valid_expansions_this_step = 0;
+
     g_metrics.astar_generated_nodes_this_step = 0;
     g_metrics.astar_valid_expansions_this_step = 0;
+
     g_metrics.dstar_generated_nodes_this_step = 0;
     g_metrics.dstar_valid_expansions_this_step = 0;
 
@@ -2487,7 +2489,7 @@ GridMap* grid_map_create(AgentManager* am) {
 }
 void grid_map_destroy(GridMap* m) { if (m) free(m); }
 
-int grid_is_valid_coord(int x, int y) { return (x >= 0 && x < GRID_WIDTH && y >= 0 && y < GRID_HEIGHT); }
+int grid_is_valid_coord(int x, int y) { return (x >= 0 && x < GRID_WIDTH&& y >= 0 && y < GRID_HEIGHT); }
 
 int grid_is_node_blocked(const GridMap* map, const AgentManager* am, const Node* n, const struct Agent_* agent) {
     if (n->is_obstacle || n->is_parked || n->is_temp) return TRUE;
@@ -3471,9 +3473,6 @@ static int PREV_buf[MAX_TOT];
 static int HEAP_NODE_buf[MAX_TOT];
 static int HEAP_POS_buf[MAX_TOT];
 
-// ST-A* 힙 연산(스왑) 카운터 (st_astar_plan_single에서 리셋/사용)
-static unsigned long long st_heap_moves_counter = 0ULL;
-
 static int heap_prefer(double* fvals, int a, int b) {
     double fa = fvals[a];
     double fb = fvals[b];
@@ -3482,26 +3481,27 @@ static int heap_prefer(double* fvals, int a, int b) {
     return a < b;
 }
 
-static void heap_swap(int* nodes, int* pos, int i, int j) {
+static void heap_swap(int* nodes, int* pos, int i, int j, unsigned long long* swap_counter) {
+    if (i == j) return;
     int ni = nodes[i];
     int nj = nodes[j];
     nodes[i] = nj;
     nodes[j] = ni;
     pos[nj] = i;
     pos[ni] = j;
-    st_heap_moves_counter++;
+    if (swap_counter) (*swap_counter)++;
 }
 
-static void heap_sift_up(int* nodes, int* pos, double* fvals, int idx) {
+static void heap_sift_up(int* nodes, int* pos, double* fvals, int idx, unsigned long long* swap_counter) {
     while (idx > 0) {
         int parent = (idx - 1) >> 1;
         if (!heap_prefer(fvals, nodes[idx], nodes[parent])) break;
-        heap_swap(nodes, pos, idx, parent);
+        heap_swap(nodes, pos, idx, parent, swap_counter);
         idx = parent;
     }
 }
 
-static void heap_sift_down(int* nodes, int* pos, double* fvals, int size, int idx) {
+static void heap_sift_down(int* nodes, int* pos, double* fvals, int size, int idx, unsigned long long* swap_counter) {
     while (1) {
         int left = (idx << 1) + 1;
         int right = left + 1;
@@ -3509,19 +3509,19 @@ static void heap_sift_down(int* nodes, int* pos, double* fvals, int size, int id
         if (left < size && heap_prefer(fvals, nodes[left], nodes[best])) best = left;
         if (right < size && heap_prefer(fvals, nodes[right], nodes[best])) best = right;
         if (best == idx) break;
-        heap_swap(nodes, pos, idx, best);
+        heap_swap(nodes, pos, idx, best, swap_counter);
         idx = best;
     }
 }
 
-static void heap_push(int* nodes, int* pos, double* fvals, int* size, int node) {
+static void heap_push(int* nodes, int* pos, double* fvals, int* size, int node, unsigned long long* swap_counter) {
     nodes[*size] = node;
     pos[node] = *size;
     (*size)++;
-    heap_sift_up(nodes, pos, fvals, (*size) - 1);
+    heap_sift_up(nodes, pos, fvals, (*size) - 1, swap_counter);
 }
 
-static int heap_pop(int* nodes, int* pos, double* fvals, int* size) {
+static int heap_pop(int* nodes, int* pos, double* fvals, int* size, unsigned long long* swap_counter) {
     if (*size == 0) return -1;
     int root = nodes[0];
     (*size)--;
@@ -3529,16 +3529,16 @@ static int heap_pop(int* nodes, int* pos, double* fvals, int* size) {
         int last = nodes[*size];
         nodes[0] = last;
         pos[last] = 0;
-        heap_sift_down(nodes, pos, fvals, *size, 0);
+        heap_sift_down(nodes, pos, fvals, *size, 0, swap_counter);
     }
     pos[root] = -1;
     return root;
 }
 
-static void heap_decrease_key(int* nodes, int* pos, double* fvals, int node) {
+static void heap_decrease_key(int* nodes, int* pos, double* fvals, int node, unsigned long long* swap_counter) {
     int idx = pos[node];
     if (idx >= 0) {
-        heap_sift_up(nodes, pos, fvals, idx);
+        heap_sift_up(nodes, pos, fvals, idx, swap_counter);
     }
 }
 
@@ -3594,12 +3594,10 @@ static int st_astar_plan_single(int agent_id, GridMap* map, Node* start, Node* g
     int W = GRID_WIDTH, H = GRID_HEIGHT;
     int TOT = (T + 1) * W * H;
     if (out_nodes_expanded) *out_nodes_expanded = 0;
+    if (out_heap_moves) *out_heap_moves = 0;
     if (out_generated_nodes) *out_generated_nodes = 0;
     if (out_valid_expansions) *out_valid_expansions = 0;
     if (TOT > MAX_TOT) return 0;
-
-    // ST-A* 힙 연산 카운터 초기화
-    st_heap_moves_counter = 0ULL;
 
     double* g = G_buf;
     double* f = F_buf;
@@ -3630,15 +3628,17 @@ static int st_astar_plan_single(int agent_id, GridMap* map, Node* start, Node* g
     g[start_idx] = 0.0;
     f[start_idx] = goal ? manhattan_xy(sx, sy, gx, gy) : 0.0;
     open[start_idx] = 1;
-    heap_push(heap_nodes, heap_pos, f, &heap_size, start_idx);
 
     int best_idx = start_idx; double best_val = f[start_idx];
     unsigned long long nodes_expanded = 0;
+    unsigned long long heap_moves = 0;
     unsigned long long generated_nodes = 0;
     unsigned long long valid_expansions = 0;
 
+    heap_push(heap_nodes, heap_pos, f, &heap_size, start_idx, &heap_moves);
+
     while (heap_size > 0) {
-        int cur = heap_pop(heap_nodes, heap_pos, f, &heap_size);
+        int cur = heap_pop(heap_nodes, heap_pos, f, &heap_size, &heap_moves);
         double curF = f[cur];
         open[cur] = 0;
         closed[cur] = 1;
@@ -3691,10 +3691,10 @@ static int st_astar_plan_single(int agent_id, GridMap* map, Node* start, Node* g
                     prev[nid] = cur;
                     if (!open[nid]) {
                         open[nid] = 1;
-                        heap_push(heap_nodes, heap_pos, f, &heap_size, nid);
+                        heap_push(heap_nodes, heap_pos, f, &heap_size, nid, &heap_moves);
                     }
                     else {
-                        heap_decrease_key(heap_nodes, heap_pos, f, nid);
+                        heap_decrease_key(heap_nodes, heap_pos, f, nid, &heap_moves);
                     }
                     valid_expansions++;
                 }
@@ -3708,7 +3708,7 @@ static int st_astar_plan_single(int agent_id, GridMap* map, Node* start, Node* g
         while (cur != -1 && plen < (MAX_WHCA_HORIZON + 1)) { path_idx[plen++] = cur; cur = prev[cur]; }
     }
     if (out_nodes_expanded) *out_nodes_expanded = nodes_expanded;
-    if (out_heap_moves) *out_heap_moves = st_heap_moves_counter;
+    if (out_heap_moves) *out_heap_moves = heap_moves;
     if (out_generated_nodes) *out_generated_nodes = generated_nodes;
     if (out_valid_expansions) *out_valid_expansions = valid_expansions;
 
@@ -5082,7 +5082,7 @@ static int simulation_is_complete(const Simulation* sim) {
  * @param sim 시뮬레이션 인스턴스
  */
 void simulation_run(Simulation* sim) {
-    ControlState cs;
+    ControlState cs; 
     ControlState_init(&cs);
 
     simulation_reset_runtime_stats(sim);
